@@ -1,0 +1,8 @@
+# 二进制与构建产物
+/distconf
+*.exe
+*.test
+*.out
+
+# 本地生成
+.bak.*

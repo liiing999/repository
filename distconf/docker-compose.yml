@@ -1,0 +1,62 @@
+services:
+  node1:
+    build:
+      context: .
+      target: runtime
+    image: distconf:latest
+    restart: unless-stopped
+    environment:
+      DISTCONF_NODE_ID: "1"
+      DISTCONF_LISTEN: ":9000"
+      DISTCONF_LEADER_ID: "1"
+      DISTCONF_PEERS: "1=node1:9000,2=node2:9000,3=node3:9000"
+      DISTCONF_SWEEP_INTERVAL: "200ms"
+      # 复制流鉴权令牌（可选）；取消下行注释即启用。
+      # DISTCONF_REPL_TOKEN: "change-me"
+    ports:
+      - "9001:9000"
+    healthcheck:
+      test: ["CMD", "/distconf", "info", "--endpoints", "127.0.0.1:9000", "--timeout", "2s"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 2s
+
+  node2:
+    image: distconf:latest
+    restart: unless-stopped
+    depends_on: [node1]
+    environment:
+      DISTCONF_NODE_ID: "2"
+      DISTCONF_LISTEN: ":9000"
+      DISTCONF_LEADER_ID: "1"
+      DISTCONF_PEERS: "1=node1:9000,2=node2:9000,3=node3:9000"
+      DISTCONF_SWEEP_INTERVAL: "200ms"
+      # DISTCONF_REPL_TOKEN: "change-me"
+    ports:
+      - "9002:9000"
+
+  node3:
+    image: distconf:latest
+    restart: unless-stopped
+    depends_on: [node1]
+    environment:
+      DISTCONF_NODE_ID: "3"
+      DISTCONF_LISTEN: ":9000"
+      DISTCONF_LEADER_ID: "1"
+      DISTCONF_PEERS: "1=node1:9000,2=node2:9000,3=node3:9000"
+      DISTCONF_SWEEP_INTERVAL: "200ms"
+      # DISTCONF_REPL_TOKEN: "change-me"
+    ports:
+      - "9003:9000"
+
+  # 一键验证：docker compose --profile verify run --rm verify
+  verify:
+    profiles: ["verify"]
+    build:
+      context: .
+      target: tools
+    image: distconf-verify:latest
+    depends_on: [node1, node2, node3]
+    environment:
+      DISTCONF_ENDPOINTS: "node1:9000,node2:9000,node3:9000"

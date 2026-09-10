@@ -1,0 +1,306 @@
+syntax = "proto3";
+
+package distconf.v1;
+
+option go_package = "github.com/example/distconf/api/distconf/v1;distconfv1";
+
+// ============================================================
+// 配置中心 KV + Watch
+// ============================================================
+service KVService {
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Put(PutRequest) returns (PutResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  // 订阅 namespace/key（或整个 namespace 前缀）的变更。
+  // WatchRequest.from_revision 表示“我已经有了 <= from_revision 的全部事件”，
+  // 服务端保证按 revision 严格升序、不丢事件地补发之后的全部历史事件，
+  // 然后转为实时推送。
+  rpc Watch(WatchRequest) returns (stream WatchEvent);
+}
+
+// ============================================================
+// 服务注册与发现
+// ============================================================
+service RegistryService {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc Discover(DiscoverRequest) returns (DiscoverResponse);
+  // 服务发现长连接：先推一条全量快照(incremental=false)，
+  // 之后实例集合变化时推增量(added/removed, incremental=true)。
+  rpc WatchInstances(DiscoverRequest) returns (stream DiscoverResponse);
+}
+
+// ============================================================
+// 集群元信息（客户端用它发现谁是 leader）
+// ============================================================
+service ClusterService {
+  rpc Info(InfoRequest) returns (InfoResponse);
+}
+
+// ============================================================
+// 节点间复制（leader -> follower 单向流）
+// ============================================================
+service ReplicationService {
+  // follower 连上 leader 后先汇报自己最后一条日志，
+  // leader 按需补缺失日志（或 snapshot），之后持续推送新条目。
+  rpc AppendEntries(stream AppendEntriesResponse) returns (stream AppendEntriesRequest);
+}
+
+// ----------------------------------------------------------------
+// 消息定义
+// ----------------------------------------------------------------
+
+message KeyValue {
+  string namespace = 1;
+  string key = 2;
+  bytes value = 3;
+  // key 级单调版本：每次 Put/Delete(产生墓碑) +1
+  int64 version = 4;
+  // 全局修订号（= 该变更对应的 Raft 日志 index），全序
+  int64 revision = 5;
+  // 租约时长（毫秒），0 表示永不过期
+  int64 ttl_ms = 6;
+  // 绝对过期时间（Unix 毫秒），由 leader 在写日志时盖戳
+  int64 expire_at_ms = 7;
+}
+
+message GetRequest {
+  string namespace = 1;
+  string key = 2;
+}
+
+message GetResponse {
+  bool found = 1;
+  KeyValue kv = 2;
+  // 响应生成时本节点已应用到的全局 revision（客户端可据此判断读的新鲜度）
+  int64 applied_revision = 3;
+  int32 leader_id = 4;
+}
+
+message PutRequest {
+  string namespace = 1;
+  string key = 2;
+  bytes value = 3;
+  int64 ttl_ms = 4;
+  // CAS：
+  //   expected_version = -1 不检查；
+ //   expected_version = 0  要求 key 不存在；
+  //   expected_version > 0  要求当前 version 恰好相等。
+  int64 expected_version = 5;
+}
+
+message PutResponse {
+  KeyValue kv = 1;
+  int32 leader_id = 2;
+}
+
+message DeleteRequest {
+  string namespace = 1;
+  string key = 2;
+  // 可选 CAS；-1 表示无条件
+  int64 expected_version = 3;
+}
+
+message DeleteResponse {
+  bool found = 1;
+  int64 revision = 2;
+  int32 leader_id = 3;
+}
+
+message WatchRequest {
+  string namespace = 1;
+  // key 为空 => 订阅整个 namespace
+  string key = 2;
+  // 客户端上次收到的最大 revision；服务端从 from_revision+1 开始补发
+  int64 from_revision = 3;
+}
+
+message WatchEvent {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    PUT = 1;
+    DELETE = 2;
+    EXPIRED = 3;
+  }
+  Kind kind = 1;
+  KeyValue kv = 2;
+  int64 revision = 3;
+  // 事件产生后集群已应用到的 revision
+  int64 cluster_revision = 4;
+}
+
+message Instance {
+  string namespace = 1;
+  string service = 2;
+  string instance_id = 3;
+  string address = 4;
+  map<string, string> metadata = 5;
+  int64 lease_ttl_ms = 6;
+  int64 expire_at_ms = 7;
+  int64 revision = 8;
+}
+
+message RegisterRequest {
+  string namespace = 1;
+  string service = 2;
+  string instance_id = 3;
+  string address = 4;
+  map<string, string> metadata = 5;
+  int64 lease_ttl_ms = 6;
+}
+
+message RegisterResponse {
+  Instance instance = 1;
+  int32 leader_id = 2;
+}
+
+message HeartbeatRequest {
+  string namespace = 1;
+  string service = 2;
+  string instance_id = 3;
+}
+
+message HeartbeatResponse {
+  Instance instance = 1;
+  int32 leader_id = 2;
+}
+
+message DiscoverRequest {
+  string namespace = 1;
+  string service = 2;
+  // 是否持续推送（true => 流保持打开，实例集合变化时推送增量）
+  bool watch = 3;
+}
+
+message DiscoverResponse {
+  repeated Instance instances = 1;
+  // watch=true 时使用：是否为快照(false 快照/true 增量)
+  bool incremental = 2;
+  repeated Instance added = 3;
+  repeated Instance removed = 4;
+  int64 applied_revision = 5;
+}
+
+message InfoRequest {}
+
+message InfoResponse {
+  int32 node_id = 1;
+  bool is_leader = 2;
+  int32 leader_id = 3;
+  int64 committed_revision = 4;
+  int64 applied_revision = 5;
+  repeated Node nodes = 6;
+}
+
+message Node {
+  int32 id = 1;
+  string address = 2;
+}
+
+// ----------------------------------------------------------------
+// 复制日志
+// ----------------------------------------------------------------
+
+message LogEntry {
+  int64 index = 1;
+  int64 term = 2; // 本实现为单静态 leader，term 恒为 1
+  oneof op {
+    PutOp put = 3;
+    DeleteOp delete = 4;
+    RegisterOp register = 5;
+    HeartbeatOp heartbeat = 6;
+    ExpireKeysOp expire_keys = 7;
+    ExpireServicesOp expire_services = 8;
+  }
+}
+
+message PutOp {
+  string namespace = 1;
+  string key = 2;
+  bytes value = 3;
+  int64 ttl_ms = 4;
+  int64 expire_at_ms = 5;
+  // CAS 在 apply（状态机）阶段判定，保证“判定顺序 == 日志顺序”。
+  int64 expected_version = 6;
+}
+
+message DeleteOp {
+  string namespace = 1;
+  string key = 2;
+  int64 expected_version = 3;
+}
+
+message RegisterOp {
+  string namespace = 1;
+  string service = 2;
+  string instance_id = 3;
+  string address = 4;
+  map<string, string> metadata = 5;
+  int64 lease_ttl_ms = 6;
+  int64 expire_at_ms = 7;
+}
+
+message HeartbeatOp {
+  string namespace = 1;
+  string service = 2;
+  string instance_id = 3;
+  reserved 6, 7;
+  // 续租守卫：仅当实例当前 revision 相等才续租
+  // （实例恰好在提议后被到期日志摘除时返回 not found）。
+  int64 guard_revision = 8;
+  // leader 盖戳的新绝对过期时间（TTL 沿用注册时的值）。
+  int64 new_expire_at_ms = 9;
+}
+
+message ExpireKeysOp {
+  repeated ExpireKey items = 1;
+}
+
+message ExpireKey {
+  string namespace = 1;
+  string key = 2;
+  // 删除守卫：只有当前值的 revision == guard_revision 才删，
+  // 防止“扫描到期 -> 日志提交”之间 key 被重新 Put 而误删。
+  int64 guard_revision = 3;
+}
+
+message ExpireServicesOp {
+  repeated ExpireService items = 1;
+}
+
+message ExpireService {
+  string namespace = 1;
+  string service = 2;
+  string instance_id = 3;
+  int64 guard_revision = 4;
+}
+
+message Snapshot {
+  int64 last_included_index = 1;
+  int64 term = 2;
+  repeated KVRecord kvs = 3;
+  repeated InstanceRecord instances = 4;
+}
+
+message KVRecord {
+  KeyValue kv = 1;
+}
+
+message InstanceRecord {
+  Instance instance = 1;
+}
+
+message AppendEntriesRequest {
+  oneof payload {
+    // 流建立后的第一条消息：leader 全量快照（follower 落后太多或为空时）
+    Snapshot snapshot = 1;
+    LogEntry entry = 2;
+  }
+}
+
+message AppendEntriesResponse {
+  int32 follower_id = 1;
+  // 本 follower 已持久化（内存中已追加）并应用到的最大 index
+  int64 ack_index = 2;
+  bool success = 3;
+}
