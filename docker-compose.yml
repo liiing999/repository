@@ -1,0 +1,68 @@
+services:
+  gateway:
+    build: .
+    image: lightweight-gateway:dev
+    command: ["gateway.app", "-c", "/etc/gateway/config.yaml"]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.compose.yaml:/etc/gateway/config.yaml:ro
+    depends_on:
+      mock-a:
+        condition: service_healthy
+      mock-b:
+        condition: service_healthy
+      mock-c:
+        condition: service_healthy
+    # 凭据只经环境变量注入（示例，默认注释）：
+    # environment:
+    #   UPSTREAM_A_TOKEN: ${UPSTREAM_A_TOKEN}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz').status==200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    stop_grace_period: 20s
+
+  mock-a:
+    image: lightweight-gateway:dev
+    build: .
+    command: ["mock_upstream.server", "--host", "0.0.0.0"]
+    ports:
+      - "9001:9000"
+    environment:
+      PORT: "9000"
+      UPSTREAM_NAME: "mock-a"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9000/healthz').status==200 else 1)"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  mock-b:
+    image: lightweight-gateway:dev
+    command: ["mock_upstream.server", "--host", "0.0.0.0"]
+    ports:
+      - "9002:9000"
+    environment:
+      PORT: "9000"
+      UPSTREAM_NAME: "mock-b"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9000/healthz').status==200 else 1)"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  mock-c:
+    image: lightweight-gateway:dev
+    command: ["mock_upstream.server", "--host", "0.0.0.0"]
+    ports:
+      - "9003:9000"
+    environment:
+      PORT: "9000"
+      UPSTREAM_NAME: "mock-c"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9000/healthz').status==200 else 1)"]
+      interval: 2s
+      timeout: 2s
+      retries: 10

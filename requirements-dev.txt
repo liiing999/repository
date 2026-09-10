@@ -1,0 +1,6 @@
+-r requirements.txt
+pytest>=8.0
+pytest-asyncio>=0.23
+pytest-timeout>=2.3
+# 可选：多副本共享限流（pip install -e .[redis] 或手动安装）
+# redis>=5.0

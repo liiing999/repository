@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lightweight-gateway"
+version = "0.1.0"
+description = "配置驱动、可水平扩展的轻量异步 API 网关（asyncio/aiohttp，无现成网关框架）"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9,<4",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+# 多副本水平扩展时，限流状态可选放到 Redis；不装则使用进程内令牌桶
+redis = ["redis>=5.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.3",
+]
+
+[project.scripts]
+lightweight-gateway = "gateway.app:main"
+mock-upstream = "mock_upstream.server:main"
+
+[tool.setuptools.packages.find]
+include = ["gateway*", "mock_upstream*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = [
+    "ignore:It is recommended to use web.AppKey",
+    "ignore:It is recommended to use web.RequestKey",
+]
+markers = [
+    "redis: 需要可连接的 Redis（默认跳过）",
+]

@@ -1,0 +1,83 @@
+# 轻量 API 网关示例配置
+# 环境变量展开：${NAME}（未设置则报错）/ ${NAME:-default}。凭据只允许经环境变量注入。
+gateway:
+  host: 0.0.0.0
+  port: 8080
+  # 每请求整体超时（含所有重试）；不设置则仅受单次 upstream_timeout 约束
+  request_timeout: 30
+  drain_timeout: 20          # 优雅退出：排空在途请求的最长时间
+  log_level: INFO
+  log_json: true
+  trust_forwarded: true      # 透传 X-Forwarded-For / Proto
+
+rate_limit_defaults:
+  # 未配置 rate_limit 的路由不受限流
+  capacity: 100
+  refill_per_second: 50
+  backend: memory            # memory | redis
+
+circuit_breaker_defaults:
+  window_seconds: 10         # 滑动统计窗口
+  min_requests: 10           # 窗口内至少这么多请求才判定熔断
+  failure_rate: 0.5          # 失败率阈值（5xx/超时/连接错误）
+  open_seconds: 5            # OPEN 持续时间，之后进入 HALF_OPEN
+  half_open_max_calls: 1     # HALF_OPEN 同时试探的请求数
+
+upstreams:
+  - name: upstream-a
+    base_url: http://mock-a:9000
+    # headers 中可引用环境变量，例如 Authorization: "Bearer ${UPSTREAM_A_TOKEN}"
+  - name: upstream-b
+    base_url: http://mock-b:9000
+  - name: upstream-c
+    base_url: http://mock-c:9000
+    # 上游级熔断器覆盖默认值（可选）
+    circuit_breaker:
+      window_seconds: 10
+      min_requests: 10
+      failure_rate: 0.5
+      open_seconds: 5
+      half_open_max_calls: 1
+
+routes:
+  - name: demo
+    path: /demo               # 前缀匹配（按最长前缀选路由）
+    strip_prefix: true        # 转发前去掉 /demo
+    upstreams: [upstream-a, upstream-b, upstream-c]
+    lb: round_robin           # round_robin | least_connections
+    timeout: 3                # 单次上游请求超时
+    retries:
+      max_attempts: 3         # 含首次；1 表示不重试
+      backoff_base: 0.1       # 第 n 次重试等待 base * 2^(n-1) + 抖动
+      backoff_max: 2.0
+      jitter: 0.05
+      retry_on_status: [502, 503, 504]
+    rate_limit:
+      capacity: 20
+      refill_per_second: 10
+    circuit_breaker:
+      enabled: true
+
+  # 最少连接负载均衡示例
+  - name: lc-demo
+    path: /lc
+    strip_prefix: true
+    upstreams: [upstream-a, upstream-b]
+    lb: least_connections
+    timeout: 5
+    retries:
+      max_attempts: 2
+      backoff_base: 0.05
+      backoff_max: 1.0
+      jitter: 0.02
+      retry_on_status: [502, 503, 504]
+    rate_limit:
+      capacity: 100
+      refill_per_second: 100
+    circuit_breaker:
+      enabled: true
+
+# 可选：Redis 共享限流（水平扩展多副本时使用）。
+# redis:
+#   url: ${GATEWAY_REDIS_URL:-redis://localhost:6379/0}
+#   key_prefix: "gw:rl"

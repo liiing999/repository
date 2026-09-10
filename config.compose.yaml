@@ -1,0 +1,58 @@
+# docker-compose 演示用配置（主机名为服务名）
+gateway:
+  host: 0.0.0.0
+  port: 8080
+  request_timeout: 10
+  drain_timeout: 15
+  log_level: INFO
+  log_json: true
+  trust_forwarded: true
+
+circuit_breaker_defaults: &cb
+  window_seconds: 10
+  min_requests: 5
+  failure_rate: 0.5
+  open_seconds: 10
+  half_open_max_calls: 1
+
+upstreams:
+  - name: upstream-a
+    base_url: http://mock-a:9000
+    # 启用上游鉴权时，取消下行注释并在 compose 中给 mock-a 配同一 UPSTREAM_TOKEN：
+    # headers: {Authorization: "Bearer ${UPSTREAM_A_TOKEN:-demo-token}"}
+  - name: upstream-b
+    base_url: http://mock-b:9000
+  - name: upstream-c
+    base_url: http://mock-c:9000
+
+routes:
+  - name: demo
+    path: /demo
+    strip_prefix: true
+    upstreams: [upstream-a, upstream-b, upstream-c]
+    lb: round_robin
+    timeout: 3
+    retries:
+      max_attempts: 3
+      backoff_base: 0.1
+      backoff_max: 1.0
+      jitter: 0.05
+      retry_on_status: [502, 503, 504]
+    # 演示场景给足令牌，避免与熔断演示互相干扰
+    rate_limit: {capacity: 1000, refill_per_second: 1000}
+    circuit_breaker:
+      <<: *cb
+      enabled: true
+
+  - name: limited
+    path: /limited
+    strip_prefix: true
+    upstreams: [upstream-a, upstream-b]
+    lb: least_connections
+    timeout: 3
+    retries: {max_attempts: 2, backoff_base: 0.05, backoff_max: 0.5, jitter: 0.02}
+    # 故意很小，方便用 curl 直接看到 429
+    rate_limit: {capacity: 3, refill_per_second: 1}
+    circuit_breaker:
+      <<: *cb
+      enabled: true
